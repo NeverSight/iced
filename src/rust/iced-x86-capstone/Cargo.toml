@@ -1,0 +1,17 @@
+[package]
+name = "iced-x86-capstone"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Bounded C ABI and Capstone compatibility profile for iced-x86"
+repository = "https://github.com/NeverSight/iced"
+[lib]
+crate-type = ["staticlib", "rlib"]
+[dependencies]
+iced-x86 = { path = "../iced-x86", default-features = false, features = ["std", "decoder", "instr_info"] }
+[workspace]
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

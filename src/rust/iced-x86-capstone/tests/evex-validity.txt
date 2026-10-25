@@ -1,0 +1,29 @@
+# Regression inputs from NeverSight/capstone 52296896 and 16211ee3.
+64 1 62f17c8958c1 # masked zeroing
+64 0 62f17c8858c1 # zeroing without mask
+64 1 62f17c4858c1 # packed L'L=10
+64 0 62f17c6858c1 # packed L'L=11
+64 1 62f17e4858c1 # scalar L'L=10
+64 0 62f17e6858c1 # scalar L'L=11
+64 0 62f17c685800 # memory L'L=11
+64 1 62f17c7858c1 # rounding L'L=11
+64 1 62f17d4875c1 # mask destination
+64 0 62e17d4875c1 # mask destination with R'
+64 0 62f1784858c1 # register form with clear U
+32 0 62f17c4058c1 # 32-bit V'
+32 0 62f27d419004a0 # 32-bit VSIB V'
+32 1 62e17d4875c1 # 32-bit mask destination with R'
+64 1 62b27e4838c1 # mask source with X
+64 1 62d27e4838c1 # mask source with B
+64 1 c4c17890ca # VEX mask source with B
+64 1 c4e269920488 # VEX gather
+64 0 c4e269920480 # VEX gather destination is index
+64 1 c4e26d920488 # VEX YMM gather
+64 0 c4e26d920480 # VEX YMM gather destination is index
+64 0 c4e271920488 # VEX gather mask is index
+64 0 c4e279920488 # VEX gather mask is destination
+32 0 c4e269920480 # 32-bit VEX gather destination is index
+64 0 62f27d49920480 # EVEX gather destination is index
+64 0 62f27d09920480 # EVEX XMM gather destination is index
+64 0 62f27d29920480 # EVEX YMM gather destination is index
+64 1 62f27d49a00480 # EVEX scatter source is index

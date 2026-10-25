@@ -503,6 +503,7 @@ where
 	// Next bytes to read if there's enough bytes left to read.
 	// This can be 1 byte past the last byte of `data`.
 	// Invariant: data.as_ptr() <= data_ptr <= max_data_ptr <= data.as_ptr() + data.len() == data_ptr_end
+	// DecoderScratch temporarily substitutes its live call-borrowed window for data.
 	// Invariant: {data_ptr,max_data_ptr,data_ptr_end}.add(max(MAX_READ_SIZE, MAX_INSTRUCTION_LENGTH)) doesn't overflow
 	data_ptr: usize,
 	// This is `data.as_ptr() + data.len()` (1 byte past the last valid byte).
@@ -578,6 +579,92 @@ where
 
 	// Input data provided by the user. When there's no more bytes left to read we'll return a NoMoreBytes error
 	data: &'a [u8],
+}
+
+/// Reuses decoder tables and mode state across independently borrowed windows.
+/// The input is borrowed only for the duration of each decode call.
+#[allow(missing_debug_implementations)]
+pub struct DecoderScratch {
+	decoder: Decoder<'static>,
+}
+
+// Only decode/decode_out/get_constant_offsets run while a scratch window is bound.
+// They read the checked pointer range, never data/position/set_position. The
+// ordinary Decoder still retains its lifetime-bound input slice. Keeping the
+// scratch decoder private prevents those stream APIs from observing a window.
+struct ScratchWindow<'a>(&'a mut Decoder<'static>);
+impl Drop for ScratchWindow<'_> {
+	fn drop(&mut self) {
+		let empty = self.0.data.as_ptr() as usize;
+		self.0.data_ptr = empty;
+		self.0.data_ptr_end = empty;
+		self.0.max_data_ptr = empty;
+		self.0.instr_start_data_ptr = empty;
+	}
+}
+impl DecoderScratch {
+	/// Creates a reusable decoder. Invalid bitness returns an error.
+	#[inline]
+	pub fn new(bitness: u32, options: u32) -> Result<Self, IcedError> {
+		Ok(Self { decoder: Decoder::try_new(bitness, &[], options)? })
+	}
+
+	/// Decodes one instruction without retaining any pointer into `data`.
+	#[inline]
+	pub fn decode_out(&mut self, data: &[u8], ip: u64, instruction: &mut Instruction) -> DecoderError {
+		self.decode_impl::<false>(data, ip, instruction).0
+	}
+
+	/// Decodes one instruction, avoiding initialization of an output buffer.
+	#[inline]
+	pub fn decode(&mut self, data: &[u8], ip: u64) -> Instruction {
+		match self.bind(data, ip) {
+			Some(window) => window.0.decode(),
+			None => Instruction::default(),
+		}
+	}
+
+	/// Decodes one instruction and returns its encoded constant extents.
+	#[inline]
+	pub fn decode_with_offsets(&mut self, data: &[u8], ip: u64, instruction: &mut Instruction) -> (DecoderError, ConstantOffsets) {
+		self.decode_impl::<true>(data, ip, instruction)
+	}
+
+	#[inline]
+	fn decode_impl<const OFFSETS: bool>(&mut self, data: &[u8], ip: u64, instruction: &mut Instruction) -> (DecoderError, ConstantOffsets) {
+		match self.bind(data, ip) {
+			Some(window) => {
+				window.0.decode_out(instruction);
+				let offsets = if OFFSETS { window.0.get_constant_offsets(instruction) } else { ConstantOffsets::default() };
+				(window.0.last_error(), offsets)
+			}
+			None => {
+				*instruction = Instruction::default();
+				(DecoderError::InvalidInstruction, ConstantOffsets::default())
+			}
+		}
+	}
+
+	#[inline]
+	fn bind<'b>(&'b mut self, data: &'b [u8], ip: u64) -> Option<ScratchWindow<'b>> {
+		// Only one instruction is consumed; this also bounds pointer arithmetic
+		// exactly as the ordinary constructor's overflow check does.
+		let len = cmp::min(data.len(), IcedConstants::MAX_INSTRUCTION_LENGTH);
+		let start = data.as_ptr() as usize;
+		if start.checked_add(len + cmp::max(IcedConstants::MAX_INSTRUCTION_LENGTH, Decoder::MAX_READ_SIZE)).is_none() {
+			return None;
+		}
+		let window = ScratchWindow(&mut self.decoder);
+		window.0.data_ptr = start;
+		window.0.data_ptr_end = start + len;
+		window.0.max_data_ptr = start;
+		window.0.instr_start_data_ptr = start;
+		window.0.ip = ip;
+		// SAFETY invariant of decoder read helpers: the pointer range is backed
+		// by this call's live data borrow. The guard clears every input pointer
+		// on return or unwind. No reference lifetime is extended or transmuted.
+		Some(window)
+	}
 }
 
 macro_rules! write_base_reg {
