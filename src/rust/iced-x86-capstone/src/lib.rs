@@ -165,3 +165,69 @@ pub unsafe extern "C" fn iced_capstone_scan_with_state(state: *mut DecoderScratc
 		((instruction.code() as u32) << 8) | instruction.len() as u32
 	}
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CapstoneScanResult {
+	pub count: usize,
+	pub bytes: usize,
+}
+
+/// Mapping entries reserve bit 15 for forms that must remain bare or one REX.
+/// IDs occupy bits 0..14; zero always declines, including a flag-only entry.
+pub const CAPSTONE_BATCH_PREFIX_SENSITIVE: u16 = 0x8000;
+
+/// Decode a contiguous prefix using a caller-owned closed Code-to-ID map.
+/// The first invalid, unmapped or profile-sensitive instruction is not emitted.
+/// Unlike independent-window calls, this amortizes decoder setup across outputs.
+///
+/// # Safety
+/// bytes covers min(length, capacity * 15) readable bytes; ids covers id_count
+/// u16 entries; output covers capacity writable u32 entries. The multiplication
+/// saturates. All ranges must be valid Rust slices and output must not overlap
+/// either input. No pointers are retained. Only output[..result.count] changes;
+/// result.bytes counts only those emitted instructions, never a declined one.
+#[no_mangle]
+pub unsafe extern "C" fn iced_capstone_scan_batch(
+	bits: u32, bytes: *const u8, length: usize, ids: *const u16, id_count: usize, output: *mut u32, capacity: usize,
+) -> CapstoneScanResult {
+	if !matches!(bits, 32 | 64) || bytes.is_null() || ids.is_null() || output.is_null() || length == 0 || capacity == 0 {
+		return CapstoneScanResult::default();
+	}
+	let input = unsafe { core::slice::from_raw_parts(bytes, length.min(capacity.saturating_mul(MAX_INSTRUCTION_BYTES))) };
+	let mapping = unsafe { core::slice::from_raw_parts(ids, id_count) };
+	let results = unsafe { core::slice::from_raw_parts_mut(output, capacity) };
+	let mut decoder = Decoder::new(bits, input, DecoderOptions::NONE);
+	let mut count = 0;
+	let mut consumed = 0;
+	while count < results.len() && decoder.can_decode() {
+		let offset = decoder.position();
+		let instruction = decoder.decode();
+		if instruction.is_invalid() {
+			break;
+		}
+		let entry = mapping.get(instruction.code() as usize).copied().unwrap_or(0);
+		let id = entry & !CAPSTONE_BATCH_PREFIX_SENSITIVE;
+		if id == 0 {
+			break;
+		}
+		// The caller owns compatibility admission. Only its sensitive entries
+		// need the additional prefix check; ordinary forms already passed the
+		// native decoder's complete operand and prefix validity checks.
+		if entry & CAPSTONE_BATCH_PREFIX_SENSITIVE != 0 {
+			let remaining = &input[offset..];
+			let opcode = if bits == 64 && remaining[0] & 0xf0 == 0x40 { 1 } else { 0 };
+			if opcode == remaining.len() {
+				break;
+			}
+			let byte = remaining[opcode];
+			if matches!(byte, 0x26 | 0x2e | 0x36 | 0x3e | 0x64 | 0x65 | 0x66 | 0x67 | 0xf0 | 0xf2 | 0xf3) || (bits == 64 && byte & 0xf0 == 0x40) {
+				break;
+			}
+		}
+		results[count] = ((id as u32) << 8) | instruction.len() as u32;
+		count += 1;
+		consumed = decoder.position();
+	}
+	CapstoneScanResult { count, bytes: consumed }
+}

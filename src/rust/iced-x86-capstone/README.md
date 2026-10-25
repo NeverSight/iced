@@ -18,10 +18,26 @@ and OpKind discriminants belong to this pinned iced source revision; callers
 must generate mappings from that same source. This is a private integration
 boundary, not an implementation of the public `cs_*` API. Detailed access,
 implicit registers, groups, printed text and Capstone IDs remain the caller's
-responsibility. NeverD's opt-in route currently admits 96 VEX/EVEX encodings
-from 14 vector move, XOR and FMA families; scalar, full-detail and remaining
-instruction forms use Capstone. The default remains off pending broader
-performance and platform qualification.
+responsibility. NeverD's opt-in single-instruction route admits 96 VEX/EVEX
+encodings from 14 vector move, XOR and FMA families. Its separate batch map
+adds selected scalar and legacy SSE encodings. Full-detail and unadmitted
+forms use Capstone. The default remains off pending broader performance and
+platform qualification.
+
+`iced_capstone_scan_batch` additionally decodes a contiguous 32/64-bit window
+in one call. The caller supplies a closed, pinned Code-to-ID table and bounded
+output storage. Map entries contain a 15-bit ID and an optional
+`CAPSTONE_BATCH_PREFIX_SENSITIVE` flag. Sensitive entries admit only a bare
+encoding or one REX in long mode; 40..4F remain instructions in 32-bit mode.
+Other entries use native iced prefix and operand validation. The caller must
+qualify each admitted encoding and mark profile-sensitive forms, including
+control transfers. Each result packs the ID (without the policy flag) and
+instruction length. It stops before an invalid, unmapped or declined input.
+The ordinary borrowing stream decoder is local to the call, so
+neither decoder state nor input pointers escape. Entries beyond the returned
+count are unchanged. NeverD's scalar admission, MOVABS/RET aliases and far-
+transfer exclusions remain in its generated mapping. This batch profile does
+not change the native iced decoder or the single-instruction ABI.
 
 ## Regression audit
 
@@ -42,7 +58,7 @@ public APIs. Run `cargo test --release --locked` from this directory.
 | `4d895799`, `e1a71eb2`, `0083ee78` access/flags | Conversion destinations, SHLD/SHRD reads/writes and TEST memory/flags pass. |
 | `fa4f7359`, `9c990989`, `78f54093` mask/GFNI detail | iced's mask reads, scalar broadcast size and scaled displacement pass; Capstone vector-size/access conventions require translation. |
 | `e0cc2636` LES/LDS/BOUND | Legacy 32-bit forms pass without being stolen by vector escape handling. |
-| `ec7f06fc` x87 environment | iced agrees with XED: effective REX.W selects 28/108-byte images even with 66. The Capstone regression incorrectly expected 14/94 bytes; do not copy that expectation into iced. |
+| `ec7f06fc`, `1fadcef9` x87 environment | iced agrees with XED: effective REX.W selects 28/108-byte images even with 66. Capstone's earlier 14/94-byte expectation was corrected by `1fadcef9`; the profile preserves the full image. |
 | `c92df86a`, `020b8ccf` normalization/lookahead | LLIG, segment-prefixed scalar vector forms and following-instruction boundaries pass; legacy INC/BOUND retain their own extents outside long mode. |
 | `196df3fd`, `c7e6a51b`, `c00aa8ae` comparison lengths/SAE | Scalar/packed L'L, register SAE, invalid memory SAE and reserved-length cases pass without rewriting the input. |
 | `90c5efcb` VP4DPW masks | iced keeps the 64-byte destination, 16-byte memory tuple and mask read distinct. Translating effective mask-byte widths remains a consumer responsibility. |
